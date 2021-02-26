@@ -27,9 +27,32 @@ SensorParams:
     max_range:      20.0
     center_offset:  [0.0, 0.0, 0.0]
     rotations:      [0.0, 0.0, 0.0]
-    fov:            [rad(2*pi), rad(pi/18)]
-    resolution:     [rad(5.0*pi/180), rad(5.0*pi/180)]
+    fov:            [rad(2*pi), rad(pi/6)]
+    resolution:     [rad(5.0*pi/180), rad(10.0*pi/180)]
     frontier_percentage_threshold: 0.1
+
+FreeFrustumParams:
+    # sensor_list:      ["Cam","PLidar"]
+    sensor_list:      ["Cam"]
+    # sensor_list:      ["VLP16", "Cam"]
+    VLP16:
+      type:           kLidar
+      max_range:      25.0
+      center_offset:  [0.0, 0.0, 0.0]
+      rotations:      [0.0, 0.0, 0.0]
+      fov:            [rad(2*pi), rad(pi/12)]
+      resolution:     [rad(5.0*pi/180), rad(3.0*pi/180)]
+      frame_id:       "/velodyne"
+    Cam:
+      type:           kLidar
+      max_range:      3.5
+      center_offset:  [0.12, 0.05, 0.005]
+      rotations:      [0.0, 1.57, 0.0]
+      fov:            [rad(2*pi/3.0), rad(pi/4.0)]
+      resolution:     [rad(1.0*pi/180), rad(1.0*pi/180)]
+      # frame_id:       "/m100/pico_flexx_optical_frame"
+      # frame_id:       "m100/vi_sensor/camera_depth_optical_center_link"
+      frame_id:       "/m100/base_link"
 #-------------------------------------------------------------------------------
 # SAMPLING SPACE CONFIGURATION
 #   Global: Strictly defined bounds for the whole environment.
@@ -38,12 +61,12 @@ SensorParams:
 BoundedSpaceParams:
   Global:
     type:           kCuboid
-    min_val:        [-0.0 , -200.0, 0.0]
-    max_val:        [500.0, 200.0, 4.0]
+    min_val:        [10.0 , -250.0, -60.0]
+    max_val:        [600.0, 250.0, 60.0]
   Local:
     type:           kCuboid
-    min_val:        [-15.0, -15.0, -1.0]
-    max_val:        [15.0, 15.0, 1.0]
+    min_val:        [-17.0, -17.0, -4.0]
+    max_val:        [17.0, 17.0, 4.0]
     min_extension:  [-20.0, -20.0, -3.0]
     max_extension:  [20.0, 20.0, 3.0]
   LocalSearch:
@@ -98,8 +121,8 @@ PlanningParams:
   yaw_tangent_correction: true
   edge_length_min:  0.2
   edge_length_max:  5.0
-  edge_overshoot:   0.0
-  num_vertices_max: 500
+  edge_overshoot:   0.5
+  num_vertices_max: 220
   num_edges_max:    3000
   num_loops_cutoff: 2000
   num_loops_max:    20000
@@ -114,15 +137,16 @@ PlanningParams:
   occupied_voxel_gain: 0.0
   free_voxel_gain:  2.0 #prefer directions towards more free voxels in case of the dead-end
   unknown_voxel_gain: 50.0
-  traverse_length_max: 7.0
+  traverse_length_max: 10.0
   traverse_time_max: 40.0
   augment_free_voxels_time: 1
   free_frustum_before_planning: false
   auto_homing_enable: false
-  time_budget_limit: 600
+  time_budget_limit: 6000
   homing_backward: true
   geofence_checking_enable: true
   path_safety_enhance_enable: true
+  freespace_cloud_enable: false
 
 GeofenceParams:
   AreaList: ["GBack"]

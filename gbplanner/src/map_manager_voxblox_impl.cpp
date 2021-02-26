@@ -373,6 +373,15 @@ void MapManagerVoxblox<SDFServerType, SDFVoxelType>::augmentFreeFrustum() {
 }
 
 template <typename SDFServerType, typename SDFVoxelType>
+void MapManagerVoxblox<SDFServerType, SDFVoxelType>::getFreeVoxelCount(int &num_voxels) {
+  pcl::PointCloud<pcl::PointXYZI> *pointcloud;
+  pointcloud = new pcl::PointCloud<pcl::PointXYZI>;
+  voxblox::createDistancePointcloudFromTsdfLayer(*sdf_layer_, pointcloud);
+  num_voxels = pointcloud->points.size();
+  delete pointcloud;
+}
+
+template <typename SDFServerType, typename SDFVoxelType>
 void MapManagerVoxblox<SDFServerType, SDFVoxelType>::extractLocalMap(
     const Eigen::Vector3d& center, const Eigen::Vector3d& bounding_box_size,
     std::vector<Eigen::Vector3d>& occupied_voxels,

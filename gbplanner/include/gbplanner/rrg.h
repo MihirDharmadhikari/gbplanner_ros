@@ -8,6 +8,7 @@
 
 #include <geometry_msgs/Polygon.h>
 #include <geometry_msgs/PolygonStamped.h>
+#include <std_msgs/Float32MultiArray.h>
 #include <kdtree/kdtree.h>
 
 #include "gbplanner/gbplanner_rviz.h"
@@ -238,6 +239,9 @@ class Rrg {
   // Publish a PCL to free the space.
   void freePointCloudtimerCallback(const ros::TimerEvent& event);
 
+  // Planner data Logger
+  void loggertimerCallback(const ros::TimerEvent& event);
+
   // Utilities.
   bool compareAngles(double dir_angle_a, double dir_angle_b, double thres);
 
@@ -387,6 +391,11 @@ class Rrg {
   ros::Publisher free_cloud_pub_;
   const double kFreePointCloudUpdatePeriod = 0.5;
   ros::Timer free_pointcloud_update_timer_;
+
+  // Publishe logged data
+  ros::Publisher logger_pub_;
+  const double kLoggerPeriod = 5.0;
+  ros::Timer logger_timer_;
 };
 
 }  // namespace gbplanner

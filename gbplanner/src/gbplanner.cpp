@@ -80,6 +80,8 @@ bool Gbplanner::setGlobalBound(
 bool Gbplanner::plannerServiceCallback(
     planner_msgs::planner_srv::Request &req,
     planner_msgs::planner_srv::Response &res) {
+
+  std::cout << "[GBP]: planner srv callback" << std::endl;
   // Extract setting from the request.
   rrg_->setGlobalFrame(req.header.frame_id);
   rrg_->setBoundMode(static_cast<explorer::BoundModeType>(req.bound_mode));
@@ -145,6 +147,7 @@ bool Gbplanner::globalPlannerServiceCallback(
     planner_msgs::planner_global::Request &req,
     planner_msgs::planner_global::Response &res) {
   res.path.clear();
+  std::cout << "[GBP]: Global planner srv callback" << std::endl;
   if (getPlannerStatus() == Gbplanner::PlannerStatus::NOT_READY) {
     ROS_WARN("The planner is not ready.");
     return false;

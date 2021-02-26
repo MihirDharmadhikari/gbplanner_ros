@@ -44,6 +44,9 @@ Rrg::Rrg(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   free_cloud_pub_ =
       nh_.advertise<sensor_msgs::PointCloud2>("freespace_pointcloud", 10);
 
+  logger_pub_ =
+      nh_.advertise<std_msgs::Float32MultiArray>("logger_data", 10);
+
   //
   global_graph_update_timer_ =
       nh_.createTimer(ros::Duration(kGlobalGraphUpdateTimerPeriod),
@@ -52,6 +55,10 @@ Rrg::Rrg(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   free_pointcloud_update_timer_ =
       nh_.createTimer(ros::Duration(kFreePointCloudUpdatePeriod),
                       &Rrg::freePointCloudtimerCallback, this);
+
+  logger_timer_ =
+      nh_.createTimer(ros::Duration(kLoggerPeriod),
+                      &Rrg::loggertimerCallback, this);
 }
 
 void Rrg::reset() {
@@ -123,6 +130,12 @@ void Rrg::reset() {
     visualization_->visualizeWorkspace(
         root_vertex_->state, global_space_params_, local_space_params_);
   }
+
+  // std::vector<Eigen::Vector3d> occ_voxs, free_voxs;
+  // Eigen::Vector3d global_box_center;
+  // global_box_center = (global_space_params_.max_val + global_space_params_.min_val) / 2.0;
+  // Eigen::Vector3d global_box_size;
+  // global_box_size = (global_space_params_.max_val - global_space_params_.min_val);
 }
 
 void Rrg::clear() {}
@@ -642,6 +655,55 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
   // Gain calculation for each vertex.
   computeExplorationGain();
 
+  bool auto_global_planning = false;
+  if(auto_global_planning) {
+    int max_unknown_voxs = 0;
+    const int unknown_vox_thr = 300;
+    for(const auto& v : local_graph_->vertices_map_) {
+      if(v.second->vol_gain.num_unknown_voxels > max_unknown_voxs)
+        max_unknown_voxs = v.second->vol_gain.num_unknown_voxels;
+    }
+    ROS_INFO("[Eval Graph]: Max unknown voxs: %d", max_unknown_voxs);
+    if(max_unknown_voxs <= unknown_vox_thr) {
+      ROS_WARN("[GBPlanner]: LOCAL EXPLORATION EXHAUSTED. TRIGGERING GLOBAL PLANNER.");
+
+      std::vector<Vertex*> global_frontiers;
+      int num_vertices = global_graph_->getNumVertices();
+      ROS_INFO("Re-check all frontiers.");
+      global_frontiers.clear();
+      for (int id = 0; id < num_vertices; ++id) {
+        if (global_graph_->getVertex(id)->type == VertexType::kFrontier) {
+          Vertex* v = global_graph_->getVertex(id);
+          computeVolumetricGainRayModelNoBound(v->state, v->vol_gain);
+          if (!v->vol_gain.is_frontier)
+            v->type = VertexType::kUnvisited;
+          else
+            global_frontiers.push_back(global_graph_->getVertex(id));
+        }
+      }
+
+      ROS_INFO("Currently have %d frontiers in the global graph.",
+               (int)global_frontiers.size());
+      if (global_frontiers.size() <= 0) {
+        ROS_INFO(
+            "No frontier exists --> Calling HOMING instead.");
+        // TODO: Call homing
+      }
+
+      double max_frontier_gain = 0;
+      Vertex* best_frontier;
+      Vertex* closest_frontier;
+      double least_frontier_dist = 9999999999.9;
+      for(auto & v: global_frontiers) {
+        if(v->vol_gain.gain > max_frontier_gain) {
+          max_frontier_gain = v->vol_gain.gain;
+          best_frontier = v;
+        }
+      }
+
+    }
+  }
+
   // Gain evaluation for valid paths, starting from the leaf to the root.
   START_TIMER(ttime);
   double best_gain = 0;
@@ -995,8 +1057,8 @@ void Rrg::addFrontiers(int best_vertex_id) {
       local_graph_, local_graph_rep_, frontier_vertices);
   visualization_->visualizeClusteredPaths(local_graph_, local_graph_rep_,
                                           frontier_vertices, cluster_ids);
-  const double kRangeCheck = 1.0;
-  const double kUpdateRadius = 3.0;
+  const double kRangeCheck = 3.0;
+  const double kUpdateRadius = 5.0;
   for (int i = 0; i < cluster_ids.size(); ++i) {
     Vertex* nearest_vertex = NULL;
     // To add principal path, verify if around that area already have vertices
@@ -1059,6 +1121,30 @@ void Rrg::freePointCloudtimerCallback(const ros::TimerEvent& event) {
   }
 }
 
+void Rrg::loggertimerCallback(const ros::TimerEvent& event) {
+  std_msgs::Float32MultiArray log;
+  // double build_graph_time;
+  // double compute_exp_gain_time;
+  // double shortest_path_time;
+  // double evaluate_graph_time;
+  // double total_time;
+  log.data.push_back((float)ros::Time::now().toSec());
+  log.data.push_back((float)stat_->build_graph_time);
+  log.data.push_back((float)stat_->compute_exp_gain_time);
+  log.data.push_back((float)stat_->shortest_path_time);
+  log.data.push_back((float)stat_->evaluate_graph_time);
+  log.data.push_back((float)stat_->total_time);
+
+  int voxs;
+  map_manager_->getFreeVoxelCount(voxs);
+  // ROS_INFO("[Logger]: Exploration status: voxs: %d",voxs);
+  log.data.push_back((float)voxs);
+
+  logger_pub_.publish(log);
+
+  ROS_INFO("Time elapsed: %f", getTimeElapsed());
+}
+
 void Rrg::expandGlobalGraphTimerCallback(const ros::TimerEvent& event) {
   // Algorithm:
   // Extract unvisited vertices in the global graph.
@@ -1097,7 +1183,10 @@ void Rrg::expandGlobalGraphTimerCallback(const ros::TimerEvent& event) {
       unvisited_vertices.push_back(global_graph_->getVertex(id));
     }
   }
+  // std::cout << "1" << std::endl;
   if (unvisited_vertices.empty()) return;
+
+  // std::cout << "2" << std::endl;
 
   int num_unvisited_vertices = unvisited_vertices.size();
   const double kLocalBoxRadius = 10;
@@ -1133,6 +1222,9 @@ void Rrg::expandGlobalGraphTimerCallback(const ros::TimerEvent& event) {
     unvisited_vertices = unvisited_vertices_remain;
     if (unvisited_vertices.empty()) break;
   }
+
+  // std::cout << "3" << std::endl;
+  
   double time_elapsed = 0;
   int loop_count = 0, loop_count_success = 0;
   int num_vertices = 1;
@@ -1148,8 +1240,8 @@ void Rrg::expandGlobalGraphTimerCallback(const ros::TimerEvent& event) {
       if (!sampleVertex(random_sampler_, centroid_state, new_state)) continue;
       // Only expand samples in sparse areas & not yet passed by the robot & not
       // closed to any frontiers
-      const double kSparseRadius = 2.0;              // m
-      const double kOverlappedFrontierRadius = 3.0;  // m
+      const double kSparseRadius = 5.0;              // m
+      const double kOverlappedFrontierRadius = 5.0;  // m
       std::vector<StateVec*> s_res;
       robot_state_hist_->getNearestStates(&new_state, kSparseRadius, &s_res);
       if (s_res.size()) continue;
@@ -1181,8 +1273,12 @@ void Rrg::expandGlobalGraphTimerCallback(const ros::TimerEvent& event) {
       }
     }
   }
+  // std::cout << "4" << std::endl;
 
   time_elapsed = GET_ELAPSED_TIME(time_lim);
+
+  visualization_->visualizeGraph(global_graph_);
+
 }
 
 void Rrg::printShortestPath(int id) {

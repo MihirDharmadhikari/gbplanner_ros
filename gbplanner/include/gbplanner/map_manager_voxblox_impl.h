@@ -155,6 +155,8 @@ class MapManagerVoxblox : MapManager {
 
   void resetMap() { sdf_server_.clear(); }
 
+  void getFreeVoxelCount(int &num_voxels);
+
  private:
   VoxelStatus getBoxStatusInVoxels(
       const voxblox::LongIndex& bounding_box_center,
