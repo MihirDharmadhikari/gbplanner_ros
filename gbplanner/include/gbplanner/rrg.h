@@ -118,6 +118,12 @@ class Rrg {
                                                     bool not_check_frontier,
                                                     bool ignore_time);
 
+  // Find next best frontier
+  bool findBestFrontier(bool ignore_time);
+
+  // Returns auto_global_path_
+  std::vector<geometry_msgs::Pose> getGlobalPath() { return auto_global_path_; }
+
   // Modify P0-P1 to center of the free corridor given surrounding obstacle PCL.
   bool modifyPath(pcl::PointCloud<pcl::PointXYZ>* obstacle_pcl,
                   Eigen::Vector3d& p0, Eigen::Vector3d& p1,
@@ -384,6 +390,8 @@ class Rrg {
   const double kGlobalGraphUpdateTimerPeriod = 0.5;
   const double kGlobalGraphUpdateTimeBudget = 0.1;
   ros::Timer global_graph_update_timer_;
+
+  std::vector<geometry_msgs::Pose> auto_global_path_;  // Note: This can also be homing path
 
   /* This is a hacky way to augment a free PCL to the map to clear out free
    * space for planning in special cases like vertical exploration.

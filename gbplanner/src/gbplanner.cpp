@@ -127,6 +127,11 @@ bool Gbplanner::plannerServiceCallback(
     // Possible options:
     // a) homing
     // b)
+
+    // Approach to implement:
+    // Call getGlobalPath of rrg.
+    // This will return the path to next frontier or homing path
+    res.path = rrg_->getGlobalPath();
   }
   return true;
 }

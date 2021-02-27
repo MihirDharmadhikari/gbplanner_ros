@@ -667,40 +667,8 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
     if(max_unknown_voxs <= unknown_vox_thr) {
       ROS_WARN("[GBPlanner]: LOCAL EXPLORATION EXHAUSTED. TRIGGERING GLOBAL PLANNER.");
 
-      std::vector<Vertex*> global_frontiers;
-      int num_vertices = global_graph_->getNumVertices();
-      ROS_INFO("Re-check all frontiers.");
-      global_frontiers.clear();
-      for (int id = 0; id < num_vertices; ++id) {
-        if (global_graph_->getVertex(id)->type == VertexType::kFrontier) {
-          Vertex* v = global_graph_->getVertex(id);
-          computeVolumetricGainRayModelNoBound(v->state, v->vol_gain);
-          if (!v->vol_gain.is_frontier)
-            v->type = VertexType::kUnvisited;
-          else
-            global_frontiers.push_back(global_graph_->getVertex(id));
-        }
-      }
-
-      ROS_INFO("Currently have %d frontiers in the global graph.",
-               (int)global_frontiers.size());
-      if (global_frontiers.size() <= 0) {
-        ROS_INFO(
-            "No frontier exists --> Calling HOMING instead.");
-        // TODO: Call homing
-      }
-
-      double max_frontier_gain = 0;
-      Vertex* best_frontier;
-      Vertex* closest_frontier;
-      double least_frontier_dist = 9999999999.9;
-      for(auto & v: global_frontiers) {
-        if(v->vol_gain.gain > max_frontier_gain) {
-          max_frontier_gain = v->vol_gain.gain;
-          best_frontier = v;
-        }
-      }
-
+      bool success = findBestFrontier(false);
+      return Rrg::GraphStatus::NO_GAIN;
     }
   }
 
@@ -1058,7 +1026,7 @@ void Rrg::addFrontiers(int best_vertex_id) {
   visualization_->visualizeClusteredPaths(local_graph_, local_graph_rep_,
                                           frontier_vertices, cluster_ids);
   const double kRangeCheck = 3.0;
-  const double kUpdateRadius = 5.0;
+  const double kUpdateRadius = 4.0;
   for (int i = 0; i < cluster_ids.size(); ++i) {
     Vertex* nearest_vertex = NULL;
     // To add principal path, verify if around that area already have vertices
@@ -1240,8 +1208,8 @@ void Rrg::expandGlobalGraphTimerCallback(const ros::TimerEvent& event) {
       if (!sampleVertex(random_sampler_, centroid_state, new_state)) continue;
       // Only expand samples in sparse areas & not yet passed by the robot & not
       // closed to any frontiers
-      const double kSparseRadius = 5.0;              // m
-      const double kOverlappedFrontierRadius = 5.0;  // m
+      const double kSparseRadius = 4.0;              // m
+      const double kOverlappedFrontierRadius = 3.0;  // m
       std::vector<StateVec*> s_res;
       robot_state_hist_->getNearestStates(&new_state, kSparseRadius, &s_res);
       if (s_res.size()) continue;
@@ -2401,7 +2369,7 @@ std::vector<geometry_msgs::Pose> Rrg::getBestPath(std::string tgt_frame,
         return homing_path;
       }
     } else {
-      // @TODO Issue with global graph, cannot find a homing path.
+      // @TODO Issue with global graph, cannot find a homing path.getBegetBestst
       ROS_WARN("Can not find a path to return home from here.");
     }
   }
@@ -3361,6 +3329,306 @@ bool Rrg::isRemainingTimeSufficient(const double& time_cost,
   const double kTimeDelta = 20;  // magic number, extra safety
   time_spare = getTimeRemained() - time_cost;
   if (time_spare < kTimeDelta) return false;
+  return true;
+}
+
+bool Rrg::findBestFrontier(bool ignore_time) {
+  // @ignore_time: don't consider time budget.
+  // Check if exists any frontier in the global graph
+  // Get the list of current frontiers.
+  ros::Duration(3.0).sleep();  // sleep to unblock the thread to get update
+  ros::spinOnce();
+
+  START_TIMER(ttime);
+  std::vector<geometry_msgs::Pose> ret_path;
+  std::vector<geometry_msgs::Pose> homing_path;
+  ret_path.clear();
+
+  // Check if the global planner exists
+  if (global_graph_->getNumVertices() <= 1) {
+    ROS_WARN("[GlobalGraph] Graph is empty, nothing to search.");
+    auto_global_path_.clear();
+    return false;
+  }
+
+
+  // Check if the time endurance is still available.
+  if (!ignore_time) {
+    if (getTimeRemained() <= 0.0) {
+      ROS_WARN("[Global] RAN OUT OF TIME --> STOP HERE.");
+      auto_global_path_.clear();
+      return false;
+    }
+  }
+
+  // Check if exists any frontiers in the graph.
+  // Re-update all the frontiers based on the volumetric gain.
+  std::vector<Vertex*> global_frontiers;
+  int num_vertices = global_graph_->getNumVertices();
+  ROS_INFO("Re-check all frontiers.");
+  global_frontiers.clear();
+  for (int id = 0; id < num_vertices; ++id) {
+    if (global_graph_->getVertex(id)->type == VertexType::kFrontier) {
+      Vertex* v = global_graph_->getVertex(id);
+      computeVolumetricGainRayModelNoBound(v->state, v->vol_gain);
+      if (!v->vol_gain.is_frontier)
+        v->type = VertexType::kUnvisited;
+      else
+        global_frontiers.push_back(global_graph_->getVertex(id));
+    }
+  }
+  ROS_INFO("Currently have %d frontiers in the global graph.",
+           (int)global_frontiers.size());
+
+  // If no frontiers exist, return to home.
+  if (global_frontiers.size() <= 0) {
+    ROS_INFO(
+        "No frontier exists --> Calling HOMING instead.");
+    // return ret_path;
+    Vertex* root_vertex = local_graph_->getVertex(0);
+    homing_path = searchHomingPath("world", root_vertex->state);
+    if (!homing_path.empty()) {
+      double homing_len = Trajectory::getPathLength(homing_path);
+      double time_to_home = homing_len / planning_params_.v_homing_max;
+      ROS_INFO("Time to home: %f", time_to_home);
+      
+      auto_global_path_ = homing_path;
+      return true;
+    } else {
+      // @TODO Issue with global graph, cannot find a homing path.getBegetBestst
+      ROS_WARN("Can not find a path to return home from here.");
+      auto_global_path_.clear();
+      return false;
+    }
+  }
+
+  // Let's try to add current state to the global graph.
+  ROS_WARN("Trying to add new vertex from current position.");
+  StateVec cur_state;
+  cur_state << current_state_[0], current_state_[1], current_state_[2],
+      current_state_[3];
+  Vertex* link_vertex = NULL;
+  const double kRadiusLimit = 1.5;  // 0.5
+  bool connected_to_graph =
+      connectStateToGraph(global_graph_, cur_state, link_vertex, kRadiusLimit);
+
+  if (!connected_to_graph) {
+    ROS_WARN("Cannot add the state to the global graph.");
+    auto_global_path_.clear();
+    return false;
+  }
+
+  ROS_WARN(
+      "Added current state to the graph. Start searching for the global path "
+      "now.");
+  // Get Dijsktra path from home to all.
+  if (!global_graph_->findShortestPaths(global_graph_rep_)) {
+    ROS_ERROR("[GlobalGraph] Failed to find shortest path to home from frontiers.");
+    auto_global_path_.clear();
+    return false;
+  }
+  // Get Dijsktra path from current to all.
+  ShortestPathsReport frontier_graph_rep;
+  if (!global_graph_->findShortestPaths(link_vertex->id, frontier_graph_rep)) {
+    ROS_ERROR("[GlobalGraph] Failed to find shortest path to frontiers.");
+    auto_global_path_.clear();
+    return false;
+  }
+
+  double best_gain = -1.0;
+  Vertex* best_frontier = NULL;
+  // Auto mode
+  // Get list of feasible frontiers by checking remaining time.
+  // Leave the check empty for now since it relate to time budget setting.
+  std::vector<Vertex*> feasible_global_frontiers;
+  for (auto& f : global_frontiers) {
+    if (ignore_time)
+      feasible_global_frontiers.push_back(f);
+    else {
+      // get gain.
+      std::vector<int> current_to_frontier_path_id;
+      std::vector<int> frontier_to_home_path_id;
+      double current_to_frontier_distance;
+      double frontier_to_home_distance;
+
+      global_graph_->getShortestPath(f->id, frontier_graph_rep, true,
+                                     current_to_frontier_path_id);
+      global_graph_->getShortestPath(f->id, global_graph_rep_, false,
+                                     frontier_to_home_path_id);
+      current_to_frontier_distance =
+          global_graph_->getShortestDistance(f->id, frontier_graph_rep);
+      frontier_to_home_distance =
+          global_graph_->getShortestDistance(f->id, global_graph_rep_);
+
+      double time_remaining = getTimeRemained();
+      double time_to_target =
+          current_to_frontier_distance / planning_params_.v_homing_max;
+      double time_to_home =
+          frontier_to_home_distance / planning_params_.v_homing_max;
+      double time_cost = time_to_target + planning_params_.auto_homing_enable
+                             ? time_to_home
+                             : 0;
+      double time_spare = 0;
+      if (isRemainingTimeSufficient(time_cost, time_spare)) {
+        feasible_global_frontiers.push_back(f);
+      }
+    }
+  }
+  ROS_INFO("There are %d potential frontiers, get %d feasible frontiers.",
+      (int)global_frontiers.size(), (int)feasible_global_frontiers.size());
+  if (feasible_global_frontiers.size() <= 0) {
+    ROS_INFO(
+        "No feasible frontier exists --> Calling HOMING instead.");
+    // return ret_path;
+    Vertex* root_vertex = local_graph_->getVertex(0);
+    homing_path = searchHomingPath("world", root_vertex->state);
+    if (!homing_path.empty()) {
+      double homing_len = Trajectory::getPathLength(homing_path);
+      double time_to_home = homing_len / planning_params_.v_homing_max;
+      ROS_INFO("Time to home: %f", time_to_home);
+      
+      auto_global_path_ = homing_path;
+      return true;
+    } else {
+      // @TODO Issue with global graph, cannot find a homing path.getBegetBestst
+      ROS_WARN("Can not find a path to return home from here.");
+      auto_global_path_.clear();
+      return false;
+    }
+  }
+
+  // Compute exploration gain.
+  std::unordered_map<int, double> frontier_exp_gain;
+  for (int i = 0; i < feasible_global_frontiers.size(); ++i) {
+    Vertex* f = feasible_global_frontiers[i];
+    // get gain.
+    std::vector<int> current_to_frontier_path_id;
+    std::vector<int> frontier_to_home_path_id;
+    double current_to_frontier_distance;
+    double frontier_to_home_distance;
+
+    global_graph_->getShortestPath(f->id, frontier_graph_rep, true,
+                                   current_to_frontier_path_id);
+    global_graph_->getShortestPath(f->id, global_graph_rep_, false,
+                                   frontier_to_home_path_id);
+    current_to_frontier_distance =
+        global_graph_->getShortestDistance(f->id, frontier_graph_rep);
+    frontier_to_home_distance =
+        global_graph_->getShortestDistance(f->id, global_graph_rep_);
+
+    // Duplication from above but easier to understand.
+    double time_to_target =
+        current_to_frontier_distance / planning_params_.v_homing_max;
+    double time_to_home =
+        frontier_to_home_distance / planning_params_.v_homing_max;
+    double time_cost = time_to_target + planning_params_.auto_homing_enable
+                           ? time_to_home
+                           : 0;
+    double time_spare = 0;
+    if (!isRemainingTimeSufficient(time_cost, time_spare)) {
+      time_spare = 1;
+    }
+
+    const double kGDistancePenalty = 0.01;
+    double exp_gain = f->vol_gain.gain *
+                      exp(-kGDistancePenalty * current_to_frontier_distance);
+    if (!ignore_time) exp_gain *= time_spare;
+    frontier_exp_gain[f->id] = exp_gain;
+    if (exp_gain > best_gain) {
+      best_gain = exp_gain;
+      best_frontier = f;
+    }
+  }
+
+  // Rank from the best one.
+  // Sort into descending order.
+  std::sort(feasible_global_frontiers.begin(),
+            feasible_global_frontiers.end(),
+            [&frontier_exp_gain](const Vertex* a, const Vertex* b) {
+              return frontier_exp_gain[a->id] > frontier_exp_gain[b->id];
+            });
+
+  std::vector<int> current_to_frontier_path_id;
+  std::vector<int> frontier_to_home_path_id;
+  if (best_gain >= 0) {
+    ROS_WARN("Found the best frontier to go is: %d", best_frontier->id);
+
+    global_graph_->getShortestPath(best_frontier->id, frontier_graph_rep, true,
+                                   current_to_frontier_path_id);
+    global_graph_->getShortestPath(best_frontier->id, global_graph_rep_, false,
+                                   frontier_to_home_path_id);
+    int current_to_frontier_path_id_size = current_to_frontier_path_id.size();
+    for (int i = 0; i < current_to_frontier_path_id_size; ++i) {
+      StateVec state =
+          global_graph_->getVertex(current_to_frontier_path_id[i])->state;
+      tf::Quaternion quat;
+      quat.setEuler(0.0, 0.0, state[3]);
+      tf::Vector3 origin(state[0], state[1], state[2]);
+      tf::Pose poseTF(quat, origin);
+      geometry_msgs::Pose pose;
+      tf::poseTFToMsg(poseTF, pose);
+      ret_path.push_back(pose);
+    }
+  } else {
+    ROS_WARN(
+        "Could not find any positive gain (Should not happen) --> Calling HOMING instead.");
+    // return ret_path;
+    Vertex* root_vertex = local_graph_->getVertex(0);
+    homing_path = searchHomingPath("world", root_vertex->state);
+    if (!homing_path.empty()) {
+      double homing_len = Trajectory::getPathLength(homing_path);
+      double time_to_home = homing_len / planning_params_.v_homing_max;
+      ROS_INFO("Time to home: %f", time_to_home);
+      
+      auto_global_path_ = homing_path;
+      return true;
+    } else {
+      // @TODO Issue with global graph, cannot find a homing path.getBegetBestst
+      ROS_WARN("Can not find a path to return home from here.");
+      auto_global_path_.clear();
+      return false;
+    }
+  }
+
+  // Set the heading angle tangent with the moving direction,
+  // from the second waypoint; the first waypoint keeps the same direction.
+  if (planning_params_.yaw_tangent_correction) {
+    for (int i = 0; i < (ret_path.size() - 1); ++i) {
+      Eigen::Vector3d vec(ret_path[i + 1].position.x - ret_path[i].position.x,
+                          ret_path[i + 1].position.y - ret_path[i].position.y,
+                          ret_path[i + 1].position.z - ret_path[i].position.z);
+      double yaw = std::atan2(vec[1], vec[0]);
+      tf::Quaternion quat;
+      quat.setEuler(0.0, 0.0, yaw);
+      ret_path[i + 1].orientation.x = quat.x();
+      ret_path[i + 1].orientation.y = quat.y();
+      ret_path[i + 1].orientation.z = quat.z();
+      ret_path[i + 1].orientation.w = quat.w();
+    }
+  }
+
+  // Modify path if required
+  if (planning_params_.path_safety_enhance_enable) {
+    ros::Time mod_time;
+    START_TIMER(mod_time);
+    std::vector<geometry_msgs::Pose> mod_path;
+    if (improveFreePath(ret_path, mod_path)) {
+      ret_path = mod_path;
+    }
+    double dmod_time = GET_ELAPSED_TIME(mod_time);
+    ROS_WARN("Compute an aternate path for homing in %f(s)", dmod_time);
+    visualization_->visualizeModPath(mod_path);
+  }
+
+  visualization_->visualizeGlobalPaths(
+      global_graph_, current_to_frontier_path_id, frontier_to_home_path_id);
+
+  double dtime = GET_ELAPSED_TIME(ttime);
+  ROS_WARN("runGlobalPlanner costs: %f (s)", dtime);
+
+  visualization_->visualizeGlobalGraph(global_graph_);
+  visualization_->visualizeRefPath(ret_path);
+  auto_global_path_ = ret_path;
   return true;
 }
 
